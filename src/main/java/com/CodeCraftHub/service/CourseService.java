@@ -1,0 +1,357 @@
+package com.CodeCraftHub.service;
+
+import com.CodeCraftHub.exception.CourseNotFoundException;
+import com.CodeCraftHub.exception.FileStorageException;
+import com.CodeCraftHub.model.Course;
+
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+@Service
+public class CourseService {
+
+    /*
+     * Location of the JSON data file.
+     *
+     * The file will be created in the project's
+     * current working directory.
+     *
+     * Example:
+     *
+     * CodeCraftHub/
+     * ├── courses.json
+     * ├── pom.xml
+     * └── src/
+     */
+    private static final Path FILE_PATH =
+            Paths.get("courses.json");
+
+    /*
+     * Jackson ObjectMapper is used to:
+     *
+     * 1. Read JSON and convert it into Java objects.
+     * 2. Convert Java objects into JSON.
+     */
+    private final ObjectMapper objectMapper;
+
+    /*
+     * Constructor.
+     *
+     * Spring creates the CourseService object automatically
+     * because of the @Service annotation.
+     */
+    public CourseService() {
+
+        objectMapper = new ObjectMapper();
+
+        /*
+         * Make sure courses.json exists when the
+         * application starts.
+         */
+        initializeFile();
+    }
+
+    /**
+     * Creates courses.json if it doesn't already exist.
+     */
+    private void initializeFile() {
+
+        try {
+
+            if (!Files.exists(FILE_PATH)) {
+
+                /*
+                 * An empty JSON array represents
+                 * an empty list of courses.
+                 */
+                Files.writeString(FILE_PATH, "[]");
+
+            }
+
+        } catch (IOException e) {
+
+            throw new FileStorageException(
+                    "Unable to create courses.json",
+                    e
+            );
+        }
+    }
+
+    /**
+     * Reads all courses from courses.json.
+     *
+     * JSON:
+     *
+     * [
+     *   {
+     *     "id": 1,
+     *     "name": "Spring Boot"
+     *   }
+     * ]
+     *
+     * becomes:
+     *
+     * List<Course>
+     */
+    private List<Course> readCourses() {
+
+        try {
+
+            String json = Files.readString(FILE_PATH);
+
+            /*
+             * If the file is empty, return an empty list.
+             */
+            if (json == null || json.isBlank()) {
+                return new ArrayList<>();
+            }
+
+            /*
+             * Jackson converts the JSON string
+             * into List<Course>.
+             *
+             * TypeReference is required because Java's
+             * generic type information is otherwise lost
+             * at runtime.
+             */
+            return objectMapper.readValue(
+                    json,
+                    new TypeReference<List<Course>>() {}
+            );
+
+        } catch (IOException e) {
+
+            throw new FileStorageException(
+                    "Unable to read courses.json",
+                    e
+            );
+        }
+    }
+
+    /**
+     * Writes all courses back to courses.json.
+     */
+    private void writeCourses(List<Course> courses) {
+
+        try {
+
+            /*
+             * Convert List<Course> into formatted JSON.
+             *
+             * Jackson 3 uses:
+             *
+             * writer()
+             *     .withDefaultPrettyPrinter()
+             *
+             * instead of the older Jackson 2 API.
+             */
+            String json = objectMapper
+                    .writer()
+                    .withDefaultPrettyPrinter()
+                    .writeValueAsString(courses);
+
+            Files.writeString(FILE_PATH, json);
+
+        } catch (IOException e) {
+
+            throw new FileStorageException(
+                    "Unable to write courses.json",
+                    e
+            );
+        }
+    }
+
+    /**
+     * GET /api/courses
+     *
+     * Returns all courses.
+     */
+    public synchronized List<Course> getAllCourses() {
+
+        return readCourses();
+    }
+
+    /**
+     * GET /api/courses/{id}
+     *
+     * Returns a specific course.
+     */
+    public synchronized Course getCourseById(Long id) {
+
+        List<Course> courses = readCourses();
+
+        return courses.stream()
+                .filter(course ->
+                        course.getId() != null &&
+                        course.getId().equals(id)
+                )
+                .findFirst()
+                .orElseThrow(() ->
+                        new CourseNotFoundException(id)
+                );
+    }
+
+    /**
+     * POST /api/courses
+     *
+     * Creates a new course.
+     *
+     * The client does NOT provide:
+     *
+     * - id
+     * - createdAt
+     *
+     * Both are generated by the application.
+     */
+    public synchronized Course createCourse(Course course) {
+
+        List<Course> courses = readCourses();
+
+        /*
+         * Find the highest existing ID.
+         *
+         * Example:
+         *
+         * Existing IDs: 1, 2, 3
+         *
+         * New ID: 4
+         *
+         * If there are no courses:
+         *
+         * New ID: 1
+         */
+        Long nextId = courses.stream()
+                .map(Course::getId)
+                .filter(id -> id != null)
+                .max(Comparator.naturalOrder())
+                .map(id -> id + 1)
+                .orElse(1L);
+
+        /*
+         * Automatically assign the ID.
+         */
+        course.setId(nextId);
+
+        /*
+         * Automatically generate created_at.
+         */
+        course.setCreatedAt(LocalDateTime.now());
+
+        /*
+         * Add the new course to the list.
+         */
+        courses.add(course);
+
+        /*
+         * Save the updated list to courses.json.
+         */
+        writeCourses(courses);
+
+        return course;
+    }
+
+    /**
+     * PUT /api/courses/{id}
+     *
+     * Updates an existing course.
+     *
+     * The following fields are preserved:
+     *
+     * - id
+     * - createdAt
+     */
+    public synchronized Course updateCourse(
+            Long id,
+            Course updatedCourse) {
+
+        List<Course> courses = readCourses();
+
+        /*
+         * Find the existing course.
+         */
+        Course existingCourse = courses.stream()
+                .filter(course ->
+                        course.getId() != null &&
+                        course.getId().equals(id)
+                )
+                .findFirst()
+                .orElseThrow(() ->
+                        new CourseNotFoundException(id)
+                );
+
+        /*
+         * Update only the fields supplied by the
+         * client.
+         *
+         * ID is NOT changed.
+         * createdAt is NOT changed.
+         */
+        existingCourse.setName(
+                updatedCourse.getName()
+        );
+
+        existingCourse.setDescription(
+                updatedCourse.getDescription()
+        );
+
+        existingCourse.setTargetDate(
+                updatedCourse.getTargetDate()
+        );
+
+        existingCourse.setStatus(
+                updatedCourse.getStatus()
+        );
+
+        /*
+         * Save the updated list.
+         */
+        writeCourses(courses);
+
+        return existingCourse;
+    }
+
+    /**
+     * DELETE /api/courses/{id}
+     *
+     * Deletes an existing course.
+     */
+    public synchronized void deleteCourse(Long id) {
+
+        List<Course> courses = readCourses();
+
+        /*
+         * removeIf returns true if at least one
+         * course was removed.
+         */
+        boolean removed = courses.removeIf(
+                course ->
+                        course.getId() != null &&
+                        course.getId().equals(id)
+        );
+
+        /*
+         * If nothing was removed, the course
+         * didn't exist.
+         */
+        if (!removed) {
+
+            throw new CourseNotFoundException(id);
+        }
+
+        /*
+         * Save the updated list.
+         */
+        writeCourses(courses);
+    }
+}

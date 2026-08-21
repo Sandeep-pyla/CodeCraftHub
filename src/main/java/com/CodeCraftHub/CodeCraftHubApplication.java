@@ -1,4 +1,4 @@
-package com.example.CodeCraftHub;
+package com.CodeCraftHub;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
